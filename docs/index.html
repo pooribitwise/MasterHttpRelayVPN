@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html dir="rtl" lang="fa-IR">
+<head>
+	<meta charset="UTF-8">
+	<title> آموزش راه‌اندازی MastterHTTPRelay در ویندوز 11 </title>
+</head>
+<body>
+	<h1>Master HTTP Relay</h1>
+	<h2> آموزش راه اندازی ابزار گذر از تحریم با Google script </h2>
+	<ol>
+		<li>
+			<h3> استخراج فایل zip پروژه </h3>
+						<ol>
+				<li><p> <a href="./files/MasterHttpRelayVPN-python_testing.zip"> فایل نصبی پایتون </a> را دانلود می‌کنیم. </p></li>
+				<li>
+					<p> با کلیک راست بر روی آن، و انتخاب محل اکسترکت، آن را باز می‌کنیم و پوشه‌ای که انتخاب کرده بودیم را به خاطر می‌سپاریم. </p>
+					<img src="./img/extract all files.png" alt="اکسترکت کردن فایل زیپ" width="50%">
+				</li>
+
+				<li>
+					<p> محلی که فایل اکسترکت شده را به خاطر بسپارید. </p>
+					<img src="./img/extract all files directory.png" alt="اکسترکت کردن فایل زیپ" width="50%">
+				</li>
+			</ol>
+		</li>
+		<li>
+			<h3> راه اندازی Google Script <font color="red"> (نیازمند VPN) </font></h3>
+			<ol>
+				<li><p>
+					وارد
+					<a href="https://script.google.com/" target="_blank"> Google Script </a>
+					می‌شویم.
+					</p>
+				</li>
+				<li>
+					<p> روی New Project کلیک می‌کنیم. </p>
+					<img src="./img/google script.png" alt="صفحه گوگل اسکریپت" width="50%">
+				</li>
+				
+				<li>
+					<p> محتویات فایل Code.gs که در پوشه app_scripts ذخیره شده و در زیر هم آمده است را در صفحه باز شده جایگزین می‌کنیم. </p>
+					<div dir="ltr"><pre><code>
+/**
+ * MasterHttpRelay &mdash; Google Apps Script
+ *
+ * DEPLOYMENT:
+ *   1. Go to https://script.google.com &rarr; New project
+ *   2. Delete the default code, paste THIS entire file
+ *   3. Click Deploy &rarr; New deployment
+ *   4. Type: Web app  |  Execute as: Me  |  Who has access: Anyone
+ *   5. Copy the Deployment ID into config.json as &quot;script_id&quot;
+ *
+ * CHANGE THE AUTH KEY BELOW TO YOUR OWN SECRET!
+ */
+
+const AUTH_KEY = &quot;CHANGE_ME_TO_A_STRONG_SECRET&quot;;
+
+// Keep browser capability headers (sec-ch-ua*, sec-fetch-*) intact.
+// Some modern apps, notably Google Meet, use them for browser gating.
+// Headers that reveal the user's real IP are also stripped here as a
+// second line of defence (the Python client strips them first).
+const SKIP_HEADERS = {
+  host: 1, connection: 1, &quot;content-length&quot;: 1,
+  &quot;transfer-encoding&quot;: 1, &quot;proxy-connection&quot;: 1, &quot;proxy-authorization&quot;: 1,
+  &quot;priority&quot;: 1, te: 1,
+  // IP-leaking / proxy-metadata headers
+  &quot;x-forwarded-for&quot;: 1, &quot;x-forwarded-host&quot;: 1, &quot;x-forwarded-proto&quot;: 1,
+  &quot;x-forwarded-port&quot;: 1, &quot;x-real-ip&quot;: 1, &quot;forwarded&quot;: 1, &quot;via&quot;: 1,
+  // Internal relay hop-count header &mdash; must not be forwarded to target sites.
+  &quot;x-mhr-hop&quot;: 1,
+  // UrlFetchApp does not decompress gzip/br/deflate responses &mdash; stripping
+  // accept-encoding forces targets to reply with plain (uncompressed) bodies
+  // so the relay never has to handle compressed content it cannot decode.
+  &quot;accept-encoding&quot;: 1,
+};
+
+// Pattern that matches any Google Apps Script execution endpoint.
+// Used to detect relay loops when an exit node is misconfigured to
+// point back at a GAS deployment.
+var _GAS_URL_RE = /^https?:\/\/script\.google\.com\/macros\//i;
+
+// If fetchAll fails, only retry methods that are safe to replay.
+const SAFE_REPLAY_METHODS = { GET: 1, HEAD: 1, OPTIONS: 1 };
+
+function doPost(e) {
+  try {
+    var req = JSON.parse(e.postData.contents);
+    if (req.k !== AUTH_KEY) return _json({ e: &quot;unauthorized&quot; });
+
+    // Batch mode: { k, q: [...] }
+    if (Array.isArray(req.q)) return _doBatch(req.q);
+
+    // Single mode
+    return _doSingle(req);
+  } catch (err) {
+    return _json({ e: String(err) });
+  }
+}
+
+// Compress a byte array with gzip to reduce bytes-on-wire over DPI-shaped
+// connections. Returns {b: byteArray, gz: true} if compression saves space,
+// otherwise {b: original, gz: false}. This can cut text payloads by 60-80%.
+function _maybeGzip(bytes) {
+  try {
+    var compressed = Utilities.gzip(Utilities.newBlob(bytes)).getBytes();
+    if (compressed.length &lt; bytes.length) {
+      return { b: compressed, gz: true };
+    }
+  } catch (e) {
+    // Gzip failed &mdash; fall through to uncompressed
+  }
+  return { b: bytes, gz: false };
+}
+
+function _doSingle(req) {
+  if (!req.u || typeof req.u !== &quot;string&quot; || !req.u.match(/^https?:\/\//i)) {
+    return _json({ e: &quot;bad url&quot; });
+  }
+  // Loop guard: refuse to relay back to any Apps Script deployment.
+  // This fires when an exit node URL is misconfigured to point at a GAS
+  // script &mdash; without this check the script would call itself indefinitely
+  // and burn through the daily UrlFetch quota in seconds.
+  if (_GAS_URL_RE.test(req.u)) {
+    return _json({ e: &quot;loop detected: relay target cannot be a Google Apps Script URL&quot; });
+  }
+  var opts = _buildOpts(req);
+  var resp = UrlFetchApp.fetch(req.u, opts);
+  var gz = _maybeGzip(resp.getContent());
+  var result = {
+    s: resp.getResponseCode(),
+    h: _respHeaders(resp),
+    b: Utilities.base64Encode(gz.b),
+  };
+  if (gz.gz) result.gz = 1;
+  return _json(result);
+}
+
+function _doBatch(items) {
+  var fetchArgs = [];
+  var fetchIndex = [];
+  var fetchMethods = [];
+  var errorMap = {};
+
+  for (var i = 0; i &lt; items.length; i++) {
+    var item = items[i];
+    if (!item || typeof item !== &quot;object&quot;) {
+      errorMap[i] = &quot;bad item&quot;;
+      continue;
+    }
+    if (!item.u || typeof item.u !== &quot;string&quot; || !item.u.match(/^https?:\/\//i)) {
+      errorMap[i] = &quot;bad url&quot;;
+      continue;
+    }
+    if (_GAS_URL_RE.test(item.u)) {
+      errorMap[i] = &quot;loop detected: relay target cannot be a Google Apps Script URL&quot;;
+      continue;
+    }
+    try {
+      var opts = _buildOpts(item);
+      opts.url = item.u;
+      fetchArgs.push(opts);
+      fetchIndex.push(i);
+      fetchMethods.push(String(item.m || &quot;GET&quot;).toUpperCase());
+    } catch (err) {
+      errorMap[i] = String(err);
+    }
+  }
+
+  // fetchAll() processes all requests in parallel inside Google
+  var responses = [];
+  if (fetchArgs.length &gt; 0) {
+    try {
+      responses = UrlFetchApp.fetchAll(fetchArgs);
+    } catch (err) {
+      // If fetchAll fails as a whole, degrade to per-item fetch so one bad
+      // request does not poison the full batch.
+      responses = [];
+      for (var j = 0; j &lt; fetchArgs.length; j++) {
+        try {
+          if (!SAFE_REPLAY_METHODS[fetchMethods[j]]) {
+            errorMap[fetchIndex[j]] = &quot;batch fetchAll failed; unsafe method not replayed&quot;;
+            responses[j] = null;
+            continue;
+          }
+          var fallbackReq = fetchArgs[j];
+          var fallbackUrl = fallbackReq.url;
+          var fallbackOpts = {};
+          for (var key in fallbackReq) {
+            if (Object.prototype.hasOwnProperty.call(fallbackReq, key) &amp;&amp; key !== &quot;url&quot;) {
+              fallbackOpts[key] = fallbackReq[key];
+            }
+          }
+          responses[j] = UrlFetchApp.fetch(fallbackUrl, fallbackOpts);
+        } catch (singleErr) {
+          errorMap[fetchIndex[j]] = String(singleErr);
+          responses[j] = null;
+        }
+      }
+    }
+  }
+
+  var results = [];
+  var rIdx = 0;
+  for (var i = 0; i &lt; items.length; i++) {
+    if (Object.prototype.hasOwnProperty.call(errorMap, i)) {
+      results.push({ e: errorMap[i] });
+    } else {
+      var resp = responses[rIdx++];
+      if (!resp) {
+        results.push({ e: &quot;fetch failed&quot; });
+      } else {
+        var gz = _maybeGzip(resp.getContent());
+        var item = {
+          s: resp.getResponseCode(),
+          h: _respHeaders(resp),
+          b: Utilities.base64Encode(gz.b),
+        };
+        if (gz.gz) item.gz = 1;
+        results.push(item);
+      }
+    }
+  }
+  return _json({ q: results });
+}
+
+function _buildOpts(req) {
+  var opts = {
+    method: (req.m || &quot;GET&quot;).toLowerCase(),
+    muteHttpExceptions: true,
+    followRedirects: req.r !== false,
+    validateHttpsCertificates: true,
+    escaping: false,
+  };
+  // Always mark outgoing UrlFetchApp requests with a relay hop counter.
+  // Exit nodes and downstream relays can inspect this header to detect
+  // loops before consuming quota or making recursive calls.
+  var headers = { &quot;x-mhr-hop&quot;: &quot;1&quot; };
+  if (req.h &amp;&amp; typeof req.h === &quot;object&quot;) {
+    for (var k in req.h) {
+      // Use call() so a crafted req.h that overrides hasOwnProperty cannot
+      // bypass the check (prototype-pollution hardening).
+      if (Object.prototype.hasOwnProperty.call(req.h, k) &amp;&amp;
+          !SKIP_HEADERS[k.toLowerCase()]) {
+        headers[k] = req.h[k];
+      }
+    }
+  }
+  opts.headers = headers;
+  if (req.b) {
+    opts.payload = Utilities.base64Decode(req.b);
+    if (req.ct) opts.contentType = req.ct;
+  }
+  return opts;
+}
+
+function _respHeaders(resp) {
+  try {
+    if (typeof resp.getAllHeaders === &quot;function&quot;) {
+      return resp.getAllHeaders();
+    }
+  } catch (err) {}
+  return resp.getHeaders();
+}
+
+function doGet(e) {
+  return HtmlService.createHtmlOutput(
+    &quot;&lt;!DOCTYPE html&gt;&lt;html&gt;&lt;head&gt;&lt;title&gt;My App&lt;/title&gt;&lt;/head&gt;&quot; +
+      '&lt;body style=&quot;font-family:sans-serif;max-width:600px;margin:40px auto&quot;&gt;' +
+      &quot;&lt;h1&gt;Welcome&lt;/h1&gt;&lt;p&gt;This application is running normally.&lt;/p&gt;&quot; +
+      &quot;&lt;/body&gt;&lt;/html&gt;&quot;
+  );
+}
+
+function _json(obj) {
+  // HtmlService responses can stay on script.google.com for /dev, while
+  // ContentService commonly bounces through script.googleusercontent.com.
+  // The Python client extracts the JSON payload from the body either way.
+  return HtmlService.createHtmlOutput(JSON.stringify(obj)).setXFrameOptionsMode(
+    HtmlService.XFrameOptionsMode.ALLOWALL
+  );
+}
+					</code></pre></div>
+					<h4> <font color="red"> نکته بسیار مهم! </font> </h4>
+					<p>
+						حتما برای امنیت، مقدار هایلایت شده را با پسوردی قوی (حداقل 32 کاراکتر و رندوم) تغییر دهید و آن را یادداشت کنید، برای مراحل بعدی به آن نیاز داریم.										
+					</p>
+					<img src="./img/code gs.png" alt="پروژه جدید" width="50%">
+				</li>
+								<li>
+					<p> بر روی Deploy کلیک کنید. </p>
+										<img src="./img/deploy.png" alt="پروژه جدید" width="50%">
+				</li>
+				<li>
+					<p> بر روی چرخ دنده بزنید و Web Apps را انتخاب کنید. </p>
+					<img src="./img/deployment.png" alt="deploying" width="50%">
+				</li>
+				<li>
+					<p> دسترسی‌ها را به طور مشخص شده تنظیم کنید.  و روی Deploy کلیک کنید. </p>
+					<img src="./img/permissions.png" alt="دسترسی‌ها" width="50%">
+				</li>
+								
+				<li>
+					<h4> ممکن است این مراحل برای همه نیاز به انجام نداشته باشد. اگر صفحه بالا آمده مطابق این قسمت نبود، به مراحل بعدی بروید. </h4>
+					<p> روی authorize کلیک کنید </p>
+										<img src="./img/authorize.png" alt="authorize" width="50%">
+				</li>
+				<li>
+					<p> یک صفحه جدید باز می‌شود، روی allow کلیک کنید. </p>
+										<img src="./img/allow.png" alt="allow" width="50%">
+					<h4> ممکن است پس از این مرحله نیاز به مراحل بیشتری برای تایید داشته باشید (برای من اتفاق نیافتاد که راهنمایی کنم) </h4>
+				</li>
+								<li>
+					<p> اگر همه چیز به خوبی پیش رفته باشد، با این تصویر روبرو خواهید شد، روی کپی کلیک کنید تا deployment id ذخیره شود و کد را به همراه رمزی که در صفحه پروژه وارد کردید جایی ذخیره کنید. </p>
+					<img src="./img/copy deployment.png" alt="allow" width="50%">
+				</li>
+			</ol>
+		</li>
+		<li>
+			<h3> نصب پایتون </h3>
+			<ol>
+				<li><p>
+				<a href="https://soft98.ir/software/programming/16260-python.html"> فایل نصبی پایتون </a>
+				رو مطابق معماری پردازنده دانلود و باز می‌کنیم <font color="red"> (pereferably run as administrator) </font>
+				</p></li>
+				<li><p> در پنجره مربوط به نصب، مطابق تصویر تیک‌های
+					<ul>
+						<li><p> Use admin privileges when installing py.exe (اختیاری، در صورتی که run as admin کرده‌اید.) </p></li>
+						<li><p> Add python.exe to PATH </p></li>
+					</ul>
+					را می‌زنیم.
+								</p></li>
+
+				<li>
+					<p> روی Customize installation کلیک می‌کنیم. </p>
+					<img src="./img/installing python 1.png" alt="مرحله اول نصب پایتون" width="50%">
+				</li>
+
+				<li><p> در این صفحه حتما تیک pip و install py launcher هم می‌زنیم. </p></li>
+				<li>
+					<p> Next </p>
+					<img src="./img/installing python 2.png" alt="مرحله دوم نصب پایتون" width="50%">
+				</li>
+
+				<li><p> مطابق تصویر، حتما تیک <font color="red"> pip </font> را می‌زنیم. </p></li>
+				<li>
+					<p> Next </p>
+					<img src="./img/installing python 3.png" alt="مرحله سوم نصب پایتون" width="50%">
+				</li>
+				<li>
+					<p> نصب آغاز می‌گردد </p>
+					<img src="./img/installing python 4.png" alt="مرحله چهارم نصب پایتون" width="50%">
+				</li>
+				<li>
+					<p> برای تست نصب صحیح پایتون، یک پنجره cmd باز می‌کنیم. </p>
+					<img src="./img/open cmd.png" alt="باز کردن ترمینال" width="50%">
+				</li>
+
+				<li>
+					<p> می‌نویسیم <code> python </code> و اینتر را می‌زنیم، اگر نصب به درستی انجام شده باشد، نوشته‌های شبیه به عکس در صفحه ترمینال چاپ می‌شود. </p>
+					<img src="./img/python in cmd.png" alt="پایتون ترمینال" width="50%">
+				</li>
+			</ol>
+		</li>
+		<li>
+			<h3> راه‌اندازی </h3>
+			<ol>
+				<li><p> و فایل start.bat موجود در پوشه که قبلا اکسترکت کردیم را اجرا می‌کنیم. </p></li>
+				<li>
+					<p> در صورت نصب درست ماژول‌ها، صفحه مانند زیر می‌شود.مطابق تصویر، کلیدی که در Code.gs که در سایت گوگل اسکریپت بارگذاری کرده بودیم را تغییر دادیم، وارد می‌کنیم. </p>
+					<img src="./img/api key.png" alt="api key insertion" width="50%">
+				</li>
+
+				<li>
+					<p> Deplyment id که از سایت گوگل اسکریپت گرفته بودیم را پیست می‌کنیم، (اگر چند عدد دریافت کرده بودید بین آنها ویرگول بگذارید و یکجا وارد کنید) </p>
+					<img src="./img/deployment id.png" alt="deployment id insertion" width="50%">
+				</li>
+
+				<li>
+					<p> در صورت نیاز به شیر کردن پروکسی به دستگاه‌های دیگر، Y و در غیر این صورت N وارد کنید. </p>
+					<img src="./img/lan sharing.png" alt="lan sharing" width="50%">
+				</li>
+				
+				<li>
+					<p> برای بقیه مراحل تنظیمات پیش‌فرض مطابق تصویر را نگه می‌داریم و بدون وارد کردن چیزی enter می‌زنیم. </p>
+					<img src="./img/listen host.png" alt="listen host" width="50%">
+					<img src="./img/proxy port.png" alt="proxy port" width="50%">
+					<img src="./img/socks port.png" alt="proxy port" width="50%">
+				</li>
+
+				<li>
+					<p> در این مرحله بر روی yes می‌زنیم تا گواهی ssl را به ویندوز بشناسانیم. </p>
+					<img src="./img/ca confirm.png" alt="ca install confirmation" width="50%">
+				</li>
+
+				<li>
+					<p> اگر همه‌ی مراحل درست رفته باشیم با تصویری مانند شکل زیر مواجه می‌شویم که دو مقدار هایلایت شده پروکسی LAN برای استفاده در سایر دستگاه‌هاست. </p>
+					<img src="./img/success.png" alt="ca install confirmation" width="50%">
+				</li>
+			</ol>
+		</li>
+		<li>
+			<h3>استفاده بر روی همان دستگاه</h3>
+			<ol>
+				<li><p> برای استفاده در دستگاهی که روی آن این ابزار راه‌اندازی شده، طبق تنظیمات پیشفرض باید ترافیک را روی localhost:8085 وارد کنیم. </p></li>
+				<li>
+					<p> تنظیمات پروکسی ویندوز را باز می‌کنیم. </p>
+					<img src="./img/proxy search.png" alt="proxy search" width="50%">
+				</li>
+
+				<li>
+					<p> روی Setup کلیک می‌کنیم. </p>
+					<img src="./img/proxy setting.png" alt="proxy setting" width="50%">
+				</li>
+
+				<li>
+					<p> مطابق تصویر تنظیمات را انجام می‌دهیم. (این مرحله را به خاطر بسپارید، برای خاموش کردن نیاز دارید که دکمه که دورش خط قرمز کشیده شده است را خاموش کنید) </p>
+					<img src="./img/proxy setup.png" alt="proxy setup" width="50%">
+				</li>
+
+				<li><p> <font color="red"> تبریک! شما توانستید با موفقیت راه‌اندازی کنید! </font></li>
+			</ol>
+		</li>
+		<li>
+			<h3> خاموش کردن </h3>
+			<p> تنها کافیست start.bat را ببندید و پروکسی را خاموش نمایید. </p>
+		</li>
+	</ol>
+</body>
