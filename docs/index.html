@@ -375,7 +375,7 @@ function _json(obj) {
 					<img src="./img/deployment id.png" alt="deployment id insertion" width="50%">
 				</li>
 
-				<li>
+				<li id="lan_sharing"> 
 					<p> در صورت نیاز به شیر کردن پروکسی به دستگاه‌های دیگر، Y و در غیر این صورت N وارد کنید. </p>
 					<img src="./img/lan sharing.png" alt="lan sharing" width="50%">
 				</li>
@@ -384,7 +384,7 @@ function _json(obj) {
 					<p> برای بقیه مراحل تنظیمات پیش‌فرض مطابق تصویر را نگه می‌داریم و بدون وارد کردن چیزی enter می‌زنیم. </p>
 					<img src="./img/listen host.png" alt="listen host" width="50%">
 					<img src="./img/proxy port.png" alt="proxy port" width="50%">
-					<img src="./img/socks port.png" alt="proxy port" width="50%">
+					<img src="./img/socks port.png" alt="socks port" width="50%">
 				</li>
 
 				<li>
@@ -392,9 +392,9 @@ function _json(obj) {
 					<img src="./img/ca confirm.png" alt="ca install confirmation" width="50%">
 				</li>
 
-				<li>
+				<li id="success">
 					<p> اگر همه‌ی مراحل درست رفته باشیم با تصویری مانند شکل زیر مواجه می‌شویم که دو مقدار هایلایت شده پروکسی LAN برای استفاده در سایر دستگاه‌هاست. </p>
-					<img src="./img/success.png" alt="ca install confirmation" width="50%">
+					<img src="./img/success.png" alt="success" width="50%">
 				</li>
 			</ol>
 		</li>
@@ -442,13 +442,20 @@ function _json(obj) {
 			</ol>
 		</li>
 		<li>
+			<h3> استفاده در دستگاه‌های دیگر </h3>
+			<p> اگر در <a href="#lan_sharing">این مرحله</a> LAN sharing را فعال کردید، می‌توانید با IP:PORT که در <a href="#success">این مرحله</a> هایلایت شده است (در کامپیوتر خودتان!) پروکسی از نوع http در تنظیمات دستگاه خود وارد نمایید (به دلیل تنوع تنظیمات هر دستگاه، از توضیحات مفصل صرف نظر می‌کنیم)
+			به دلیل http بودن پروکسی و رمزگذاری شدن آن توسط اسکریپت، باید گواهی ca.crt موجود در پوشه ca پروژه را در دستگاه مورد نظر به لیست گواهی‌های مورد اعتماد اضافه کنید.
+			در غیر این صورت با هشدار مرورگر مواجه خواهید شد.
+			</p>
+		</li>
+		<li>
 			<h3> خاموش کردن </h3>
 			<p> تنها کافیست start.bat را ببندید و پروکسی را خاموش نمایید. </p>
 		</li>
 		<li>
 			<h3> Troubleshooting </h3>
-			<p> در صورت به وجود آمدن مشکل می‌توانید بخش troubleshooting <a href="../README.md">README</a> یا <a href="../README_FA.md">راهنمای فارسی</a> را مطالعه کنید.</p>
-			<h4><a href="https://github.com/masterking32/MasterHttpRelayVPN/tree/python_testing"> ریپازیتوری اصلی پروژه<a/></h4>
+			<p> در صورت به وجود آمدن مشکل می‌توانید بخش troubleshooting <a target="_blank" href="../README.md">README</a> یا <a target="_blank" href="../README_FA.md">راهنمای فارسی</a> را مطالعه کنید.</p>
+			<h4><a target="_blank" href="https://github.com/masterking32/MasterHttpRelayVPN/tree/python_testing"> ریپازیتوری اصلی پروژه<a/></h4>
 		</li>
 	</ol>
 </body>
