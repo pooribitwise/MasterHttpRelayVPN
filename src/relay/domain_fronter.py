@@ -110,6 +110,8 @@ class DomainFronter:
         "sec-fetch-site",
     )
     _SAFE_RETRY_METHODS = {"GET", "HEAD", "OPTIONS"}
+    _EXIT_NODE_BYPASS_SUFFIXES = ("googlevideo.com",)
+    _APPS_SCRIPT_DEFAULT_LANG = "en"
 
     def __init__(self, config: dict):
         self.connect_host = config.get("google_ip", "216.239.38.120")
@@ -128,6 +130,9 @@ class DomainFronter:
         self._script_idx = 0
         self.script_id = self._script_ids[0]  # backward compat / logging
         self._dev_available = False  # True if /dev endpoint works (no redirect, ~400ms faster)
+        self._apps_script_lang = str(
+            config.get("apps_script_lang", self._APPS_SCRIPT_DEFAULT_LANG)
+        ).strip().lower() or self._APPS_SCRIPT_DEFAULT_LANG
 
         # Simple execution monitor: log total consumed Apps Script executions.
         self._execution_report_interval = 5.0
@@ -597,10 +602,13 @@ class DomainFronter:
         payload = json.dumps(
             {"m": "GET", "u": "http://example.com/", "k": self.auth_key}
         ).encode()
+        path = f"/macros/s/{sid}/exec?hl={self._apps_script_lang}"
         request = (
-            f"POST /macros/s/{sid}/exec HTTP/1.1\r\n"
+            f"POST {path} HTTP/1.1\r\n"
             f"Host: {self.http_host}\r\n"
             "Content-Type: application/json\r\n"
+            "Accept: application/json,text/plain,*/*\r\n"
+            "Accept-Language: en-US,en;q=0.9\r\n"
             f"Content-Length: {len(payload)}\r\n"
             "Connection: close\r\n\r\n"
         ).encode() + payload
@@ -952,7 +960,17 @@ class DomainFronter:
 
     def _exec_path_for_sid(self, sid: str) -> str:
         """Build the /macros/s/<sid>/(dev|exec) path for a specific script ID."""
-        return f"/macros/s/{sid}/{'dev' if self._dev_available else 'exec'}"
+        endpoint = "dev" if self._dev_available else "exec"
+        # Force Google Apps Script UI/errors to English for stable diagnostics.
+        return f"/macros/s/{sid}/{endpoint}?hl={self._apps_script_lang}"
+
+    def _apps_script_headers(self) -> dict[str, str]:
+        """Headers for Apps Script relay calls (control-plane, not target origin)."""
+        return {
+            "content-type": "application/json",
+            "accept": "application/json,text/plain,*/*",
+            "accept-language": "en-US,en;q=0.9",
+        }
     async def _flush_pool(self):
         """Close all pooled connections (they may be stale after errors)."""
         async with self._pool_lock:
@@ -1140,13 +1158,13 @@ class DomainFronter:
         payload = json.dumps(
             {"m": "GET", "u": "http://example.com/", "k": self.auth_key}
         ).encode()
-        hdrs = {"content-type": "application/json"}
+        hdrs = self._apps_script_headers()
         sid = self._script_ids[0]
 
         # Test /dev endpoint — returns data inline (no 302 redirect).
         # If it works, saves ~400ms per request by eliminating one round trip.
         try:
-            dev_path = f"/macros/s/{sid}/dev"
+            dev_path = f"/macros/s/{sid}/dev?hl={self._apps_script_lang}"
             t0 = time.perf_counter()
             self._record_execution(sid)
             status, _, body = await asyncio.wait_for(
@@ -1167,7 +1185,7 @@ class DomainFronter:
 
         # Fallback: warm up with /exec
         try:
-            exec_path = f"/macros/s/{sid}/exec"
+            exec_path = f"/macros/s/{sid}/exec?hl={self._apps_script_lang}"
             t0 = time.perf_counter()
             self._record_execution(sid)
             await asyncio.wait_for(
@@ -1233,7 +1251,7 @@ class DomainFronter:
                 await asyncio.wait_for(
                     self._h2.request(
                         method="POST", path=path, host=self.http_host,
-                        headers={"content-type": "application/json"},
+                        headers=self._apps_script_headers(),
                         body=json.dumps(payload).encode(),
                     ),
                     timeout=20,
@@ -1372,12 +1390,17 @@ class DomainFronter:
         """Return True if this URL should be routed through the exit node."""
         if not self._exit_node_enabled or not self._exit_node_url:
             return False
-        if self._exit_node_mode == "full":
-            return True
-        # selective: check if destination hostname matches configured list
         host = self._host_key(url)
         if not host:
             return False
+        # googlevideo flows are large/CPU-heavy; keep them on direct Google relay
+        # and never chain through Cloudflare/Deno/VPS exit nodes.
+        if any(host == suffix or host.endswith("." + suffix)
+               for suffix in self._EXIT_NODE_BYPASS_SUFFIXES):
+            return False
+        if self._exit_node_mode == "full":
+            return True
+        # selective: check if destination hostname matches configured list
         for pattern in self._exit_node_hosts:
             if host == pattern or host.endswith("." + pattern):
                 return True
@@ -2595,7 +2618,7 @@ class DomainFronter:
         t0 = time.perf_counter()
         status, headers, body = await (self._pick_h2() or self._h2).request(
             method="POST", path=path, host=self.http_host,
-            headers={"content-type": "application/json"},
+            headers=self._apps_script_headers(),
             body=json_body,
             timeout=self._relay_timeout,
         )
@@ -2626,7 +2649,7 @@ class DomainFronter:
 
         status, headers, body = await (self._pick_h2() or self._h2).request(
             method="POST", path=path, host=self.http_host,
-            headers={"content-type": "application/json"},
+            headers=self._apps_script_headers(),
             body=json_body,
             timeout=self._relay_timeout,
         )
@@ -2664,6 +2687,8 @@ class DomainFronter:
             request_lines = [
                 f"{redirect_method} {rpath} HTTP/1.1",
                 f"Host: {parsed.netloc}",
+                "Accept: application/json,text/plain,*/*",
+                "Accept-Language: en-US,en;q=0.9",
                 "Accept-Encoding: gzip",
                 "Connection: keep-alive",
             ]
@@ -2693,6 +2718,8 @@ class DomainFronter:
                 f"POST {path} HTTP/1.1\r\n"
                 f"Host: {self.http_host}\r\n"
                 f"Content-Type: application/json\r\n"
+                f"Accept: application/json,text/plain,*/*\r\n"
+                f"Accept-Language: en-US,en;q=0.9\r\n"
                 f"Content-Length: {len(json_body)}\r\n"
                 f"Accept-Encoding: gzip\r\n"
                 f"Connection: keep-alive\r\n"
@@ -2745,7 +2772,7 @@ class DomainFronter:
                 status, headers, body = await asyncio.wait_for(
                     (self._pick_h2() or self._h2).request(
                         method="POST", path=path, host=self.http_host,
-                        headers={"content-type": "application/json"},
+                        headers=self._apps_script_headers(),
                         body=json_body,
                         timeout=batch_timeout,
                     ),
