@@ -7,8 +7,41 @@
 <body>
 	<h1>Master HTTP Relay</h1>
 	<h2> آموزش راه اندازی ابزار گذر از تحریم با Google script </h2>
+	<h3> فهرست مطالب </h3>
 	<ol>
 		<li>
+			<a href="#extract"> استخراج زیپ پروژه</a>
+		</li>
+                <li>
+                        <a href="#googlescript"> دریافت api key از سایت گوگل اسکریپت </a>
+                </li>
+                <li>
+                        <a href="#python"> نصب پایتون </a>
+                </li>
+                <li>
+                        <a href="#run"> اجرا </a>
+                </li>
+                <li>
+                        <a href="#localproxy"> راه اندازی پروکسی </a>
+                </li>
+                <li>
+                        <a href="#telegram"> افزودن پروکسی به تلگرام </a>
+                </li>
+                <li>
+                        <a href="#LAN"> راه اندازی روی سایر دستگاه‌های شبکه محلی </a>
+                </li>
+                <li>
+                        <a href="#shutdown"> خاموش کردن </a>
+                </li>
+                <li>
+                        <a href="#troubleshoot"> رفع مشکل </a>
+                </li>
+
+
+
+	</ol>
+	<ol>
+		<li id="extract">
 			<h3> استخراج فایل zip پروژه </h3>
 						<ol>
 				<li><p> <a href="./files/MasterHttpRelayVPN-python_testing.zip"> فایل zip پروژه </a> را دانلود می‌کنیم. </p></li>
@@ -23,7 +56,7 @@
 				</li>
 			</ol>
 		</li>
-		<li>
+		<li id="googlescript">
 			<h3> راه اندازی Google Script <font color="red"> (نیازمند VPN) </font></h3>
 			<ol>
 				<li><p>
@@ -315,7 +348,7 @@ function _json(obj) {
 				</li>
 			</ol>
 		</li>
-		<li>
+		<li id="python">
 			<h3> نصب پایتون </h3>
 			<ol>
 				<li><p>
@@ -361,7 +394,7 @@ function _json(obj) {
 				</li>
 			</ol>
 		</li>
-		<li>
+		<li id="run">
 			<h3> راه‌اندازی </h3>
 			<ol>
 				<li><p> و فایل start.bat موجود در پوشه که قبلا اکسترکت کردیم را اجرا می‌کنیم. </p></li>
@@ -398,7 +431,7 @@ function _json(obj) {
 				</li>
 			</ol>
 		</li>
-		<li>
+		<li id="localproxy">
 			<h3>استفاده بر روی همان دستگاه</h3>
 			<ol>
 				<li><p> برای استفاده در دستگاهی که روی آن این ابزار راه‌اندازی شده، طبق تنظیمات پیشفرض باید ترافیک را روی localhost:8085 وارد کنیم. </p></li>
@@ -412,14 +445,14 @@ function _json(obj) {
 					<img src="./img/proxy setting.png" alt="proxy setting" width="50%">
 				</li>
 
-				<li>
+				<li id="proxysetup">
 					<p> مطابق تصویر تنظیمات را انجام می‌دهیم. (این مرحله را به خاطر بسپارید، برای خاموش کردن نیاز دارید که دکمه که دورش خط قرمز کشیده شده است را خاموش کنید) </p>
 					<img src="./img/proxy setup.png" alt="proxy setup" width="50%">
 				</li>
 
 				<li><p> <font color="red"> تبریک! شما توانستید با موفقیت راه‌اندازی کنید! </font></li>
 			</ol>
-		<li>
+		<li id="telgram">
 			<h3>راه اندازی تلگرام</h3>
 			<p> به دلیل استفاده تلگرام از MTProto امکان استفاده از تلگرام به طور مستقیم روی گوشی وجود ندارد. اما با تلگرام دسکتاپ و ایجاد یک پروکسی با پروتکل HTTP میمیHTTP می‌توان از آن استفاده کرد </p>
 			<ol>
@@ -441,7 +474,7 @@ function _json(obj) {
 				</li>
 			</ol>
 		</li>
-		<li>
+		<li id="LAN">
 			<h3> استفاده در دستگاه‌های دیگر </h3>
 			<p> اگر در <a href="#lan_sharing">این مرحله</a> LAN sharing را فعال کردید، می‌توانید با IP:PORT که در <a href="#success">این مرحله</a> هایلایت شده است (در کامپیوتر خودتان!) پروکسی از نوع http در تنظیمات دستگاه خود وارد نمایید (به دلیل تنوع تنظیمات هر دستگاه، از توضیحات مفصل صرف نظر می‌کنیم)
 			به دلیل http بودن پروکسی و رمزگذاری شدن آن توسط اسکریپت، باید گواهی ca.crt موجود در پوشه ca پروژه را در دستگاه مورد نظر به لیست گواهی‌های مورد اعتماد اضافه کنید.
@@ -451,11 +484,11 @@ function _json(obj) {
 			مطالعه کنید.
 			</p>
 		</li>
-		<li>
+		<li id="shutdown">
 			<h3> خاموش کردن </h3>
-			<p> تنها کافیست start.bat را ببندید و پروکسی را خاموش نمایید. </p>
+			<p> تنها کافیست start.bat را ببندید و <a href="#proxysetup"> پروکسی </a>  را خاموش نمایید. </p>
 		</li>
-		<li>
+		<li id="troubleshoot">
 			<h3> Troubleshooting </h3>
 			<p> در صورت به وجود آمدن مشکل می‌توانید بخش troubleshooting <a target="_blank" href="https://github.com/pooribitwise/MasterHttpRelayVPN/blob/python_testing/README.md">README</a> یا <a target="_blank" href="https://github.com/pooribitwise/MasterHttpRelayVPN/blob/python_testing/README_FA.md">راهنمای فارسی</a> را مطالعه کنید.</p>
 			<h4><a target="_blank" href="https://github.com/pooribitwise/MasterHttpRelayVPN/tree/python_testing"> ریپازیتوری اصلی پروژه<a/></h4>
